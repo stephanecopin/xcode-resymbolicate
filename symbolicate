@@ -1,0 +1,44 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+if ARGV.count < 2
+  puts('Invalid arguments. Usage:')
+  puts("$#{File.basename(__FILE__)} <crash log> <symbol 1> <symbol 2> ...")
+  puts('The symbols can be a list of paths to the content of a DSYM file, or the app itself.')
+  exit 1
+end
+
+def symbol_name(architecture, symbol_path, load_address, symbol_address)
+  `atos -o '#{symbol_path}' -arch #{architecture} -l #{load_address} #{symbol_address} | xargs echo -n`
+end
+
+require 'tempfile'
+
+crash_log_path = ARGV[0]
+temporary_crash_log_file = Tempfile.new(File.basename(crash_log_path))
+crash_log_content = File.read(crash_log_path)
+temporary_crash_log_file.write(crash_log_content)
+architecture = crash_log_content[/Code Type: +([a-zA-Z0-9-]+).*$/, 1].downcase.gsub('-', '_')
+
+
+ARGV[1..].each do |symbol_path|
+  temporary_crash_log_file.rewind
+  current_content = temporary_crash_log_file.read
+  current_content.gsub!(/^(\d+)([[:space:]]+[^ ]+[[:space:]]+)(0x[a-zA-Z\d]+)([[:space:]]+)(0x[a-zA-Z\d]+)(.*)$/) do |_unused|
+    stack_index = $1
+    app_info = $2
+    symbol_address = $3
+    address_space = $4
+    load_address = $5
+    suffix = $6
+    "#{stack_index}#{app_info}#{symbol_address}#{address_space}#{symbol_name(architecture, symbol_path, load_address, symbol_address)}#{suffix}"
+  end
+  temporary_crash_log_file.rewind
+  temporary_crash_log_file.write(current_content)
+end
+
+temporary_crash_log_file.rewind
+File.write(crash_log_path, temporary_crash_log_file.read)
+
+temporary_crash_log_file.close
+temporary_crash_log_file.unlink
