@@ -1,15 +1,19 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+require 'open3'
+
 if ARGV.count < 2
   puts('Invalid arguments. Usage:')
   puts("$#{File.basename(__FILE__)} <crash log> <symbol 1> <symbol 2> ...")
-  puts('The symbols can be a list of paths to the content of a DSYM file, or the app itself.')
+  puts('The symbols can be a list of paths to the content of a DSYM file (inside the DWARF folder), or the app itself.')
   exit 1
 end
 
 def symbol_name(architecture, symbol_path, load_address, symbol_address)
-  `atos -o '#{symbol_path}' -arch #{architecture} -l #{load_address} #{symbol_address} | xargs echo -n`
+  symbol_name, error, status = Open3.capture3("atos -o '#{symbol_path}' -arch #{architecture} -l #{load_address} #{symbol_address}")
+  raise "#{symbol_path} warning: couldn't symbolicate #{load_address} #{symbol_address} for architecture #{architecture} (#{status})" if status.exitstatus != 0
+  symbol_name.trim
 end
 
 require 'tempfile'
@@ -20,18 +24,21 @@ crash_log_content = File.read(crash_log_path)
 temporary_crash_log_file.write(crash_log_content)
 architecture = crash_log_content[/Code Type: +([a-zA-Z0-9-]+).*$/, 1].downcase.gsub('-', '_')
 
-
 ARGV[1..].each do |symbol_path|
   temporary_crash_log_file.rewind
   current_content = temporary_crash_log_file.read
-  current_content.gsub!(/^(\d+)([[:space:]]+[^ ]+[[:space:]]+)(0x[a-zA-Z\d]+)([[:space:]]+)(0x[a-zA-Z\d]+)(.*)$/) do |_unused|
-    stack_index = $1
-    app_info = $2
-    symbol_address = $3
-    address_space = $4
-    load_address = $5
-    suffix = $6
-    "#{stack_index}#{app_info}#{symbol_address}#{address_space}#{symbol_name(architecture, symbol_path, load_address, symbol_address)}#{suffix}"
+  begin
+    current_content.gsub!(/^(\d+)([[:space:]]+[^ ]+[[:space:]]+)(0x[a-zA-Z\d]+)([[:space:]]+)(0x[a-zA-Z\d]+)(.*)$/) do |_unused|
+      stack_index = $1
+      app_info = $2
+      symbol_address = $3
+      address_space = $4
+      load_address = $5
+      suffix = $6
+      "#{stack_index}#{app_info}#{symbol_address}#{address_space}#{symbol_name(architecture, symbol_path, load_address, symbol_address)}#{suffix}"
+    end
+  rescue => exception
+    puts exception.message
   end
   temporary_crash_log_file.rewind
   temporary_crash_log_file.write(current_content)
